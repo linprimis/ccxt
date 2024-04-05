@@ -6,7 +6,7 @@ import { ExchangeError, ExchangeNotAvailable, OnMaintenance, ArgumentsRequired, 
 import { Precise } from './base/Precise.js';
 import { TICK_SIZE } from './base/functions/number.js';
 import { sha256 } from './static_dependencies/noble-hashes/sha256.js';
-import type { TransferEntry, Int, OrderSide, OrderType, Trade, OHLCV, Order, FundingRateHistory, OrderRequest, FundingHistory, Str, Transaction, Ticker, OrderBook, Balances, Tickers, Market, Greeks, Strings, MarketInterface, Currency, Leverage, Num, Account, OptionChain, Option, MarginModification } from './base/types.js';
+import type { TransferEntry, Int, OrderSide, OrderType, Trade, OHLCV, Order, FundingRateHistory, OrderRequest, FundingHistory, Str, Transaction, Ticker, OrderBook, Balances, Tickers, Market, Greeks, Strings, MarketInterface, Currency, Leverage, Num, Account, OptionChain, Option, MarginModification, TradingFeeInterface, Currencies } from './base/types.js';
 
 //  ---------------------------------------------------------------------------
 
@@ -86,6 +86,7 @@ export default class okx extends Exchange {
                 'fetchLedgerEntry': undefined,
                 'fetchLeverage': true,
                 'fetchLeverageTiers': false,
+                'fetchMarginAdjustmentHistory': true,
                 'fetchMarketLeverageTiers': true,
                 'fetchMarkets': true,
                 'fetchMarkOHLCV': true,
@@ -1557,7 +1558,7 @@ export default class okx extends Exchange {
         return this.safeString (networksById, networkId, networkId);
     }
 
-    async fetchCurrencies (params = {}) {
+    async fetchCurrencies (params = {}): Promise<Currencies> {
         /**
          * @method
          * @name okx#fetchCurrencies
@@ -2343,7 +2344,7 @@ export default class okx extends Exchange {
         return this.safeBalance (result);
     }
 
-    parseTradingFee (fee, market: Market = undefined) {
+    parseTradingFee (fee, market: Market = undefined): TradingFeeInterface {
         // https://www.okx.com/docs-v5/en/#rest-api-account-get-fee-rates
         //
         //     {
@@ -2363,10 +2364,12 @@ export default class okx extends Exchange {
             // OKX returns the fees as negative values opposed to other exchanges, so the sign needs to be flipped
             'maker': this.parseNumber (Precise.stringNeg (this.safeString2 (fee, 'maker', 'makerU'))),
             'taker': this.parseNumber (Precise.stringNeg (this.safeString2 (fee, 'taker', 'takerU'))),
+            'percentage': undefined,
+            'tierBased': undefined,
         };
     }
 
-    async fetchTradingFee (symbol: string, params = {}) {
+    async fetchTradingFee (symbol: string, params = {}): Promise<TradingFeeInterface> {
         /**
          * @method
          * @name okx#fetchTradingFee
@@ -6459,9 +6462,9 @@ export default class okx extends Exchange {
         //     }
         //
         const data = this.safeList (response, 'data', []);
+        const entry = this.safeDict (data, 0, {});
         const errorCode = this.safeString (response, 'code');
-        const item = this.safeDict (data, 0, {});
-        return this.extend (this.parseMarginModification (item, market), {
+        return this.extend (this.parseMarginModification (entry, market), {
             'status': (errorCode === '0') ? 'ok' : 'failed',
         });
     }
@@ -6477,22 +6480,67 @@ export default class okx extends Exchange {
         //        "type": "reduce"
         //    }
         //
-        const amountRaw = this.safeNumber (data, 'amt');
+        // fetchMarginAdjustmentHistory
+        //
+        //    {
+        //        bal: '67621.4325135010619812',
+        //        balChg: '-10.0000000000000000',
+        //        billId: '691293628710342659',
+        //        ccy: 'USDT',
+        //        clOrdId: '',
+        //        execType: '',
+        //        fee: '0',
+        //        fillFwdPx: '',
+        //        fillIdxPx: '',
+        //        fillMarkPx: '',
+        //        fillMarkVol: '',
+        //        fillPxUsd: '',
+        //        fillPxVol: '',
+        //        fillTime: '1711089244850',
+        //        from: '',
+        //        instId: 'XRP-USDT-SWAP',
+        //        instType: 'SWAP',
+        //        interest: '0',
+        //        mgnMode: 'isolated',
+        //        notes: '',
+        //        ordId: '',
+        //        pnl: '0',
+        //        posBal: '73.12',
+        //        posBalChg: '10.00',
+        //        px: '',
+        //        subType: '160',
+        //        sz: '10',
+        //        tag: '',
+        //        to: '',
+        //        tradeId: '0',
+        //        ts: '1711089244699',
+        //        type: '6'
+        //    }
+        //
+        const amountRaw = this.safeString2 (data, 'amt', 'posBalChg');
         const typeRaw = this.safeString (data, 'type');
-        const type = (typeRaw === 'reduce') ? 'reduce' : 'add';
+        let type = undefined;
+        if (typeRaw === '6') {
+            type = Precise.stringGt (amountRaw, '0') ? 'add' : 'reduce';
+        } else {
+            type = typeRaw;
+        }
+        const amount = Precise.stringAbs (amountRaw);
         const marketId = this.safeString (data, 'instId');
         const responseMarket = this.safeMarket (marketId, market);
         const code = responseMarket['inverse'] ? responseMarket['base'] : responseMarket['quote'];
+        const timestamp = this.safeInteger (data, 'ts');
         return {
             'info': data,
             'symbol': responseMarket['symbol'],
             'type': type,
-            'amount': amountRaw,
-            'total': undefined,
+            'marginMode': 'isolated',
+            'amount': this.parseNumber (amount),
             'code': code,
+            'total': undefined,
             'status': undefined,
-            'timestamp': undefined,
-            'datetime': undefined,
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
         };
     }
 
@@ -7612,5 +7660,105 @@ export default class okx extends Exchange {
             throw new ExchangeError (feedback); // unknown message
         }
         return undefined;
+    }
+
+    async fetchMarginAdjustmentHistory (symbol: Str = undefined, type: Str = undefined, since: Num = undefined, limit: Num = undefined, params = {}): Promise<MarginModification[]> {
+        /**
+         * @method
+         * @name okx#fetchMarginAdjustmentHistory
+         * @description fetches the history of margin added or reduced from contract isolated positions
+         * @see https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-bills-details-last-7-days
+         * @see https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-bills-details-last-3-months
+         * @param {string} [symbol] not used by okx fetchMarginAdjustmentHistory
+         * @param {string} [type] "add" or "reduce"
+         * @param {object} params extra parameters specific to the exchange api endpoint
+         * @param {boolean} [params.auto] true if fetching auto margin increases
+         * @returns {object[]} a list of [margin structures]{@link https://docs.ccxt.com/#/?id=margin-loan-structure}
+         */
+        await this.loadMarkets ();
+        const auto = this.safeBool (params, 'auto');
+        if (type === undefined) {
+            throw new ArgumentsRequired (this.id + ' fetchMarginAdjustmentHistory () requires a type argument');
+        }
+        const isAdd = type === 'add';
+        let subType = isAdd ? '160' : '161';
+        if (auto) {
+            if (isAdd) {
+                subType = '162';
+            } else {
+                throw new BadRequest (this.id + ' cannot fetch margin adjustments for type ' + type);
+            }
+        }
+        const request = {
+            'subType': subType,
+            'mgnMode': 'isolated',
+        };
+        const until = this.safeInteger (params, 'until');
+        params = this.omit (params, 'until');
+        if (since !== undefined) {
+            request['startTime'] = since;
+        }
+        if (limit !== undefined) {
+            request['limit'] = limit;
+        }
+        if (until !== undefined) {
+            request['endTime'] = until;
+        }
+        let response = undefined;
+        const now = this.milliseconds ();
+        const oneWeekAgo = now - 604800000;
+        const threeMonthsAgo = now - 7776000000;
+        if ((since === undefined) || (since > oneWeekAgo)) {
+            response = await this.privateGetAccountBills (this.extend (request, params));
+        } else if (since > threeMonthsAgo) {
+            response = await this.privateGetAccountBillsArchive (this.extend (request, params));
+        } else {
+            throw new BadRequest (this.id + ' fetchMarginAdjustmentHistory () cannot fetch margin adjustments older than 3 months');
+        }
+        //
+        //    {
+        //        code: '0',
+        //        data: [
+        //            {
+        //                bal: '67621.4325135010619812',
+        //                balChg: '-10.0000000000000000',
+        //                billId: '691293628710342659',
+        //                ccy: 'USDT',
+        //                clOrdId: '',
+        //                execType: '',
+        //                fee: '0',
+        //                fillFwdPx: '',
+        //                fillIdxPx: '',
+        //                fillMarkPx: '',
+        //                fillMarkVol: '',
+        //                fillPxUsd: '',
+        //                fillPxVol: '',
+        //                fillTime: '1711089244850',
+        //                from: '',
+        //                instId: 'XRP-USDT-SWAP',
+        //                instType: 'SWAP',
+        //                interest: '0',
+        //                mgnMode: 'isolated',
+        //                notes: '',
+        //                ordId: '',
+        //                pnl: '0',
+        //                posBal: '73.12',
+        //                posBalChg: '10.00',
+        //                px: '',
+        //                subType: '160',
+        //                sz: '10',
+        //                tag: '',
+        //                to: '',
+        //                tradeId: '0',
+        //                ts: '1711089244699',
+        //                type: '6'
+        //            }
+        //        ],
+        //        msg: ''
+        //    }
+        //
+        const data = this.safeList (response, 'data');
+        const modifications = this.parseMarginModifications (data);
+        return this.filterBySymbolSinceLimit (modifications, symbol, since, limit);
     }
 }
