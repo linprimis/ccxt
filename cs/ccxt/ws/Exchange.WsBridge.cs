@@ -34,6 +34,12 @@ public partial class Exchange
             var urlClient = (this.clients.ContainsKey(client.url)) ? this.clients[client.url] : null;
             if (urlClient != null)
             {
+                // Reject all futures in this client
+                foreach (var future in urlClient.futures.Values)
+                {
+                    future.reject(new ExchangeError(add(this.id, " WebSocket connection closed.")));
+                }
+                client.futures.Clear();
                 // this.clients.Remove(client.url);
                 this.clients.TryRemove(client.url, out _);
             }
@@ -46,9 +52,17 @@ public partial class Exchange
         var urlClient = (this.clients.ContainsKey(client.url)) ? this.clients[client.url] : null;
         if (urlClient != null && urlClient.error)
         {
+            // Reject all futures in this client
+            foreach (var future in urlClient.futures.Values)
+            {
+                future.reject(error);
+            }
+            client.futures.Clear();
+
             // this.clients.Remove(client.url);
             this.clients.TryRemove(client.url, out _);
         }
+        
     }
 
     public async virtual Task loadOrderBook(WebSocketClient client, object messageHash, object symbol, object limit = null, object parameters = null)

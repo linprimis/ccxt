@@ -160,7 +160,8 @@ public class ArrayCacheByTimestamp : BaseCache
         {
             return this.newUpdates;
         }
-        var limit = (int)limit2;
+        //var limit = (int)limit2;
+        var limit = Convert.ToInt32(limit2);
         return Math.Min(this.newUpdates, limit);
     }
 

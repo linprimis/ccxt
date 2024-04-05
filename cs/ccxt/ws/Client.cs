@@ -75,6 +75,12 @@ public partial class Exchange
 
         public Future future(object messageHash2)
         {
+            // if client.error is true, raise an exception and do not wait
+            if (this.error)
+            {
+                throw new ExchangeError("error: " + this.url + " client was down.");
+            }
+
             var messageHash = messageHash2.ToString();
             // var tcs = new TaskCompletionSource<object>();
             // this.futures[messageHash] = tcs;
@@ -261,6 +267,8 @@ public partial class Exchange
                 catch (Exception ex)
                 {
                     tcs.SetException(ex); // Set the exception if something goes wrong
+                    this.error = true;      // Set error status
+                    this.onError(this,ex);  // Call onError callback
                 }
                 finally
                 {
@@ -411,7 +419,8 @@ public partial class Exchange
                     Console.WriteLine($"Receiving error: {ex.Message}");
                 }
                 this.isConnected = false;
-                this.onError(this, ex);
+                this.error = true;      // Set error status
+                this.onError(this, ex);  // Call onError callback
             }
         }
 
@@ -426,6 +435,8 @@ public partial class Exchange
                 catch (Exception e)
                 {
                     // Console.WriteLine(e);
+                    this.error = true;
+                    this.onError(this, e);
                 }
 
             }

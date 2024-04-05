@@ -388,7 +388,7 @@ public partial class Exchange
         var reload = (bool)reload2;
         parameters2 ??= new dict();
         var parameters = (dict)parameters2;
-        if ((reload && !this.reloadingMarkets) || this.marketsLoading == null)
+        if ((reload && !this.reloadingMarkets) || this.marketsLoading == null || this.marketsLoading.Status== TaskStatus.Faulted)
         {
             this.reloadingMarkets = true;
             this.marketsLoading = (this.loadMarketsHelper(reload, parameters).ContinueWith((t) =>
