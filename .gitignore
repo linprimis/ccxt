@@ -41,3 +41,7 @@ __pycache__
 bin/
 obj/
 
+## focus on python and C# only
+js/
+php/
+ts/
