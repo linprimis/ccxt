@@ -2456,7 +2456,7 @@ export default class Exchange {
     parseToInt (number) {
         // Solve Common parseInt misuse ex: parseInt ((since / 1000).toString ())
         // using a number as parameter which is not valid in ts
-        const stringifiedNumber = number.toString ();
+        const stringifiedNumber = this.numberToString (number);
         const convertedNumber = parseFloat (stringifiedNumber) as any;
         return parseInt (convertedNumber);
     }
@@ -5074,13 +5074,6 @@ export default class Exchange {
         if (!this.substituteCommonCurrencyCodes) {
             return code;
         }
-        // if the provided code already exists as a value in commonCurrencies dict, then we should not again transform it
-        // more details at: https://github.com/ccxt/ccxt/issues/21112#issuecomment-2031293691
-        const commonCurrencies = Object.values (this.commonCurrencies);
-        const exists = this.inArray (code, commonCurrencies);
-        if (exists) {
-            return code;
-        }
         return this.safeString (this.commonCurrencies, code, code);
     }
 
@@ -5771,7 +5764,6 @@ export default class Exchange {
          * @returns {object} objects with withdraw and deposit fees, indexed by currency codes
          */
         const depositWithdrawFees = {};
-        codes = this.marketCodes (codes);
         const isArray = Array.isArray (response);
         let responseKeys = response;
         if (!isArray) {
@@ -6354,7 +6346,7 @@ export default class Exchange {
     }
 
     convertMarketIdExpireDate (date: string): string {
-        // parse 19JAN24 to 240119
+        // parse 03JAN24 to 240103
         const monthMappping = {
             'JAN': '01',
             'FEB': '02',
@@ -6369,6 +6361,10 @@ export default class Exchange {
             'NOV': '11',
             'DEC': '12',
         };
+        // if exchange omits first zero and provides i.e. '3JAN24' instead of '03JAN24'
+        if (date.length === 6) {
+            date = '0' + date;
+        }
         const year = date.slice (0, 2);
         const monthName = date.slice (2, 5);
         const month = this.safeString (monthMappping, monthName);
